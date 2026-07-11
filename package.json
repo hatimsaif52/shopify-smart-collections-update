@@ -1,0 +1,9 @@
+{
+  "name": "shopify-smart-collections-update",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+  	"@upstash/qstash": "^2.x.x"
+  }
+}
