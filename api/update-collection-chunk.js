@@ -42,11 +42,13 @@ export default async function handler(req, res) {
     const chunkJsonl = jsonlLines.join('\n');
     
     // Save this specific chunk text directly into Vercel Blob
-    await put(`batches/${batchId}/chunk-${chunkIndex}.jsonl`, chunkJsonl, {
-      access: 'public',
-      contentType: 'text/jsonl'
-    });
-
+    if(chunkJsonl != '') {
+      await put(`batches/${batchId}/chunk-${chunkIndex}.jsonl`, chunkJsonl, {
+        access: 'public',
+        contentType: 'text/jsonl'
+      });
+    }
+    
     console.log(`[Batch ${batchId}] Saved Chunk ${chunkIndex + 1}/${totalChunks} to Blob Storage.`);
 
     // If this is the absolute final chunk item pushed to execution logs, call finalizer

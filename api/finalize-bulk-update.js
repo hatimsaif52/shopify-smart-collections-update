@@ -1,6 +1,6 @@
 // api/finalize-bulk-update.js
 import { list, del } from '@vercel/blob';
-import { uploadJsonl, runBulk } from 'shopifyUtils.js';
+import { uploadJsonl, runBulk } from './shopifyUtils.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
