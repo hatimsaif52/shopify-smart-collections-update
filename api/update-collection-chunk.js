@@ -42,7 +42,7 @@ export default async function handler(req, res) {
     const chunkJsonl = jsonlLines.join('\n');
     
     // Save this specific chunk text directly into Vercel Blob
-    if(chunkJsonl != '') {
+    if(chunkJsonl.trim() !== '') {
       await put(`batches/${batchId}/chunk-${chunkIndex}.jsonl`, chunkJsonl, {
         access: 'public',
         contentType: 'text/jsonl'
