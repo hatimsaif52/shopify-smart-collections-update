@@ -7,7 +7,6 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
   try {
-    // 1. Accept the dryRun flag from the incoming body payload
     const { collectionsJsonlUrl, storeCfg, dryRun = false } = req.body;
 
     const response = await fetch(collectionsJsonlUrl);
@@ -16,25 +15,30 @@ export default async function handler(req, res) {
     
     const chunkSize = 500; 
     const totalChunks = Math.ceil(collections.length / chunkSize);
+    const batchId = `${storeCfg.store.replace(/[^a-zA-Z0-9]/g, '')}-${Date.now()}`;
 
-    console.log(`[DRY RUN: ${dryRun}] Splitting ${collections.length} collections into ${totalChunks} chunks for ${storeCfg.store}`);
+    console.log(`[Batch: ${batchId}] Enqueueing ${totalChunks} ordered FIFO chunks for ${storeCfg.store}`);
 
     for (let i = 0; i < collections.length; i += chunkSize) {
       const chunk = collections.slice(i, i + chunkSize);
+      const chunkIndex = i / chunkSize;
 
+      // Publish with sequential group ordering
       await qstashClient.publishJSON({
         url: `https://${req.headers.host}/api/update-collection-chunk`,
+        group: batchId, 
         body: {
           storeCfg,
           collectionChunk: chunk,
-          dryRun // 2. Forward the safety flag to the workers
+          dryRun,
+          batchId,
+          chunkIndex,
+          totalChunks
         }
       });
     }
 
-    return res.status(200).json({ 
-      message: `Successfully queued ${totalChunks} chunks. Mode: ${dryRun ? 'DRY RUN (Simulated)' : 'LIVE UPDATE'}` 
-    });
+    return res.status(200).json({ message: `Successfully queued ordered chunks.`, batchId });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: err.message });

@@ -1,13 +1,12 @@
 // api/update-collection-chunk.js
-import { uploadJsonl, runBulk } from './shopifyUtils.js';
+import { put } from '@vercel/blob';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
   try {
-    const { storeCfg, collectionChunk, dryRun = false } = req.body;
+    const { storeCfg, collectionChunk, dryRun = false, batchId, chunkIndex, totalChunks } = req.body;
     let jsonlLines = [];
-    let dryRunReport = [];
 
     const MANDATORY_RULES = [
       { column: "VARIANT_INVENTORY", relation: "GREATER_THAN", condition: "0" }, 
@@ -16,21 +15,14 @@ export default async function handler(req, res) {
 
     for (const collection of collectionChunk) {
       const ruleSet = collection.ruleSet || { rules: [], appliedDisjunctively: false };
-      
-      if (ruleSet.appliedDisjunctively) {
-        dryRunReport.push({ id: collection.id, handle: collection.handle, status: "SKIPPED_DISJUNCTIVE" });
-        continue;
-      }
+      if (ruleSet.appliedDisjunctively) continue;
 
       const existingRules = ruleSet.rules || [];
       const missingRules = MANDATORY_RULES.filter(mRule => 
         !existingRules.some(eRule => eRule.column === mRule.column && eRule.relation === mRule.relation)
       );
 
-      if (missingRules.length === 0) {
-        dryRunReport.push({ id: collection.id, handle: collection.handle, status: "NO_CHANGES_REQUIRED" });
-        continue;
-      }
+      if (missingRules.length === 0) continue;
 
       const finalRules = [...existingRules, ...missingRules].map(r => ({
         column: r.column,
@@ -38,61 +30,36 @@ export default async function handler(req, res) {
         condition: r.condition
       }));
 
-      // Map out simulation details for logs
-      dryRunReport.push({
-        id: collection.id,
-        handle: collection.handle,
-        status: "NEEDS_UPDATE",
-        addedRules: missingRules
-      });
-
-      const mutationLine = {
+      jsonlLines.push(JSON.stringify({
         input: {
           id: collection.id,
           ruleSet: { appliedDisjunctively: false, rules: finalRules }
         }
-      };
-
-      jsonlLines.push(JSON.stringify(mutationLine));
+      }));
     }
 
-    // --- DRY RUN EXIT PATH ---
-    if (dryRun) {
-      const changingCount = dryRunReport.filter(r => r.status === "NEEDS_UPDATE").length;
-      console.log(`[DRY RUN REPORT] Store: ${storeCfg.store}. Total evaluated: ${dryRunReport.length}. Modifications needed: ${changingCount}`);
-      
-      // Log the specific items changing so you can audit them in Vercel logs
-      console.log("Simulated changes:", JSON.stringify(dryRunReport.filter(r => r.status === "NEEDS_UPDATE"), null, 2));
+    // Even if no collections need updating, write an empty file to maintain chunk counting indexes
+    const chunkJsonl = jsonlLines.join('\n');
+    
+    // Save this specific chunk text directly into Vercel Blob
+    await put(`batches/${batchId}/chunk-${chunkIndex}.jsonl`, chunkJsonl, {
+      access: 'public',
+      contentType: 'text/jsonl'
+    });
 
-      return res.status(200).json({
-        message: "Dry run completed successfully. No data was written to Shopify.",
-        summary: {
-          totalEvaluated: dryRunReport.length,
-          willUpdate: changingCount,
-          details: dryRunReport
-        }
+    console.log(`[Batch ${batchId}] Saved Chunk ${chunkIndex + 1}/${totalChunks} to Blob Storage.`);
+
+    // If this is the absolute final chunk item pushed to execution logs, call finalizer
+    if (chunkIndex === totalChunks - 1) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      await fetch(`https://${req.headers.host}/api/finalize-bulk-update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeCfg, batchId, totalChunks, dryRun })
       });
     }
 
-    // --- LIVE ROAD ---
-    if (jsonlLines.length === 0) {
-      return res.status(200).json({ message: "No adjustments required for this chunk." });
-    }
-
-    const bulkInputJsonl = jsonlLines.join('\n');
-    const mutationSignature = `
-      mutation collectionUpdate($input: CollectionInput!) {
-        collectionUpdate(input: $input) {
-          collection { id }
-          userErrors { field message }
-        }
-      }
-    `;
-
-    const stagedPath = await uploadJsonl(storeCfg, bulkInputJsonl);
-    const executionResponse = await runBulk(storeCfg, stagedPath, mutationSignature);
-
-    return res.status(200).json({ status: "Processing Live Bulk Operations", executionResponse });
+    return res.status(200).json({ status: `Chunk ${chunkIndex} Saved.` });
 
   } catch (err) {
     console.error("Worker Execution Failure: ", err);
