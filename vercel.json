@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron-master.js",
+      "schedule": "0 3 * * *" 
+    },
+    {
+      "path": "/api/sync-collections",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}
