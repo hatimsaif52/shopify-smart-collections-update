@@ -8,9 +8,9 @@ import {
 export default async function handler(req, res) {
   try {
     // 1. Extract query params and auth header
-    const { searchParams } = new URL(req.url, `https://${req.headers.get('host') || 'localhost'}`);
+    const { searchParams } = new URL(req.url, `https://${req.headers.host}`);
     const manualStore = searchParams.get('store');
-    const authHeader = req.headers.get('authorization') || req.headers.authorization;
+    const authHeader = req.headers.authorization;
 
     // 2. Validate Authorization
     if (!manualStore && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
