@@ -44,7 +44,7 @@ async function getFuseInstanceForStore(storeDomain) {
   const fuseInstance = new Fuse(collections, {
     keys: ['title'],
     includeScore: true,
-    threshold: 0.38,       // 0.0 = exact match, 1.0 = matches anything
+    threshold: 0.5,       // 0.0 = exact match, 1.0 = matches anything
     distance: 100,        // Spatial search range for typos
     minMatchCharLength: 2
   });
@@ -104,7 +104,7 @@ export default async function handler(req, res) {
     const bestMatch = results[0];
 
     // 3. Evaluate match confidence score (Fuse score: 0 = perfect match, 1 = worst match)
-    if (bestMatch.score <= 0.38) {
+    if (bestMatch.score <= 0.5) {
       return res.status(200).json({
         redirect: true,
         handle: bestMatch.item.handle,
