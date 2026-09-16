@@ -3,11 +3,7 @@ import Fuse from 'fuse.js';
 const SYNONYM_MAP = {
   'tuxedo': ['suit', 'tux'],
   'tux': ['suit', 'tuxedo'],
-  'suit': ['tuxedo', 'tux'],
-  'pants': ['trousers', 'slacks'],
-  'trousers': ['pants', 'slacks'],
-  'shoe': ['footwear', 'sneaker'],
-  'boot': ['footwear']
+  'suit': ['tuxedo', 'tux']
 };
 
 // In-memory cache mapping store domains to their Fuse instances and fetch timestamps
@@ -19,13 +15,13 @@ const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes cache TTL
  * Expands a query string to include interchangeable synonyms
  * e.g., "boot cut tuxedo" -> "boot cut tuxedo suit tux"
  */
-function expandQueryWithSynonyms(query, synonymMap) {
+function expandQueryWithSynonyms(query) {
   const words = query.toLowerCase().trim().split(/\s+/);
   
   return words.map(word => {
     // If exact word has synonyms, group them in Fuse's logical OR syntax
-    if (synonymMap[word]) {
-      return `(${word} | ${synonymMap[word].join(' | ')})`;
+    if (SYNONYM_MAP[word]) {
+      return `(${word} | ${SYNONYM_MAP[word].join(' | ')})`;
     }
     return word;
   }).join(' ');
