@@ -45,8 +45,11 @@ async function getFuseInstanceForStore(storeDomain) {
     keys: ['title'],
     includeScore: true,
     threshold: 0.5,       // 0.0 = exact match, 1.0 = matches anything
+    ignoreLocation: true,
+    useExtendedSearch: true,
     distance: 100,        // Spatial search range for typos
-    minMatchCharLength: 2
+    minMatchCharLength: 3,
+    findAllMatches: true
   });
 
   // Save to in-memory store cache
