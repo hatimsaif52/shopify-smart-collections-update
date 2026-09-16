@@ -19,7 +19,7 @@ const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes cache TTL
  * Expands a query string to include interchangeable synonyms
  * e.g., "boot cut tuxedo" -> "boot cut tuxedo suit tux"
  */
-function expandQuerySafely(query, synonymMap) {
+function expandQueryWithSynonyms(query, synonymMap) {
   const words = query.toLowerCase().trim().split(/\s+/);
   
   return words.map(word => {
