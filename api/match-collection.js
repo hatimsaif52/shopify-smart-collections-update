@@ -129,7 +129,7 @@ export default async function handler(req, res) {
     // 1. Expand query with synonyms ("boot cut tuxedo" -> "boot cut tuxedo suit tux")
     const expandedQuery = expandQueryWithSynonyms(cleanQuery);
     const queryWords = cleanQuery.split(/\s+/).filter(w => w.length > 2);
-    
+
     let bestMatch = null;
 
     // PASS 1: Check 2-word phrase matches using original words
@@ -161,7 +161,7 @@ export default async function handler(req, res) {
     }
 
     // Final Score Check
-    if (bestMatch.score <= 0.40) {
+    if (bestMatch.score <= 0.5) {
       return res.status(200).json({
         redirect: true,
         handle: bestMatch.item.handle,
