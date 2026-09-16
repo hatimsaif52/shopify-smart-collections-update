@@ -1,9 +1,35 @@
 import Fuse from 'fuse.js';
 
+const SYNONYM_MAP = {
+  'tuxedo': ['suit', 'tux'],
+  'tux': ['suit', 'tuxedo'],
+  'suit': ['tuxedo', 'tux'],
+  'pants': ['trousers', 'slacks'],
+  'trousers': ['pants', 'slacks'],
+  'shoe': ['footwear', 'sneaker'],
+  'boot': ['footwear']
+};
+
 // In-memory cache mapping store domains to their Fuse instances and fetch timestamps
 // Structure: { [sanitizedStore]: { instance: Fuse, timestamp: number } }
 const storeCache = new Map();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes cache TTL
+
+/**
+ * Expands a query string to include interchangeable synonyms
+ * e.g., "boot cut tuxedo" -> "boot cut tuxedo suit tux"
+ */
+function expandQuerySafely(query, synonymMap) {
+  const words = query.toLowerCase().trim().split(/\s+/);
+  
+  return words.map(word => {
+    // If exact word has synonyms, group them in Fuse's logical OR syntax
+    if (synonymMap[word]) {
+      return `(${word} | ${synonymMap[word].join(' | ')})`;
+    }
+    return word;
+  }).join(' ');
+}
 
 /**
  * Normalizes store domains into clean string filenames
@@ -98,16 +124,44 @@ export default async function handler(req, res) {
   try {
     // 2. Fetch the store-specific Fuse instance
     const fuse = await getFuseInstanceForStore(store);
-    const results = fuse.search(query.trim());
+    const cleanQuery = query.trim();
 
-    if (!results || results.length === 0) {
-      return res.status(200).json({ redirect: false, reason: 'No collection match found' });
+    // 1. Expand query with synonyms ("boot cut tuxedo" -> "boot cut tuxedo suit tux")
+    const expandedQuery = expandQueryWithSynonyms(cleanQuery);
+    const queryWords = cleanQuery.split(/\s+/).filter(w => w.length > 2);
+    
+    let bestMatch = null;
+
+    // PASS 1: Check 2-word phrase matches using original words
+    if (queryWords.length >= 2) {
+      for (let i = 0; i < queryWords.length - 1; i++) {
+        const pair = `${queryWords[i]} ${queryWords[i+1]}`;
+        
+        // Also expand synonyms for the phrase pair (e.g., "cut tuxedo" -> "cut tuxedo suit")
+        const expandedPair = expandQueryWithSynonyms(pair);
+        const pairResults = fuse.search(expandedPair);
+
+        if (pairResults.length > 0 && pairResults[0].score <= 0.38) {
+          bestMatch = pairResults[0];
+          break;
+        }
+      }
     }
 
-    const bestMatch = results[0];
+    // PASS 2: Fall back to full expanded query search
+    if (!bestMatch) {
+      const fullResults = fuse.search(expandedQuery);
+      if (fullResults && fullResults.length > 0) {
+        bestMatch = fullResults[0];
+      }
+    }
 
-    // 3. Evaluate match confidence score (Fuse score: 0 = perfect match, 1 = worst match)
-    if (bestMatch.score <= 0.5) {
+    if (!bestMatch) {
+      return res.status(200).json({ redirect: false, reason: 'No match found' });
+    }
+
+    // Final Score Check
+    if (bestMatch.score <= 0.40) {
       return res.status(200).json({
         redirect: true,
         handle: bestMatch.item.handle,
