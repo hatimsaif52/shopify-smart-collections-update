@@ -1,25 +1,29 @@
 import Fuse from 'fuse.js';
 
+const storeCache = new Map();
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
+// Controlled, whole-word synonym map for equivalent terms
 const SYNONYM_MAP = {
   'tuxedo': ['suit', 'tux'],
   'tux': ['suit', 'tuxedo'],
-  'suit': ['tuxedo', 'tux']
+  'suit': ['tuxedo', 'tux'],
+  'pants': ['trousers', 'slacks'],
+  'trousers': ['pants', 'slacks']
 };
 
-// In-memory cache mapping store domains to their Fuse instances and fetch timestamps
-// Structure: { [sanitizedStore]: { instance: Fuse, timestamp: number } }
-const storeCache = new Map();
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes cache TTL
+function sanitizeStoreDomain(domain) {
+  return domain.toLowerCase().replace(/[^a-z0-9]/g, '-');
+}
 
 /**
- * Expands a query string to include interchangeable synonyms
- * e.g., "boot cut tuxedo" -> "boot cut tuxedo suit tux"
+ * Expands whole words safely using Fuse extended search syntax:
+ * "boot cut tuxedo" -> "boot cut (tuxedo | suit | tux)"
  */
-function expandQueryWithSynonyms(query) {
+function buildExtendedQuery(query) {
   const words = query.toLowerCase().trim().split(/\s+/);
   
   return words.map(word => {
-    // If exact word has synonyms, group them in Fuse's logical OR syntax
     if (SYNONYM_MAP[word]) {
       return `(${word} | ${SYNONYM_MAP[word].join(' | ')})`;
     }
@@ -27,23 +31,10 @@ function expandQueryWithSynonyms(query) {
   }).join(' ');
 }
 
-/**
- * Normalizes store domains into clean string filenames
- * e.g., "my-shop.myshopify.com" -> "my-shop-myshopify-com"
- */
-function sanitizeStoreDomain(domain) {
-  return domain.toLowerCase().replace(/[^a-z0-9]/g, '-');
-}
-
-/**
- * Fetches the collection map for a specific store from Blob Storage 
- * and initializes or returns the cached Fuse.js instance.
- */
 async function getFuseInstanceForStore(storeDomain) {
   const sanitizedStore = sanitizeStoreDomain(storeDomain);
   const now = Date.now();
 
-  // Check if warm cache exists and is fresh
   if (storeCache.has(sanitizedStore)) {
     const cached = storeCache.get(sanitizedStore);
     if (now - cached.timestamp < CACHE_TTL_MS) {
@@ -51,30 +42,26 @@ async function getFuseInstanceForStore(storeDomain) {
     }
   }
 
-  // Construct Vercel Blob CDN URL
   const blobBaseUrl = process.env.VERCEL_BLOB_BASE_URL;
   const blobUrl = `${blobBaseUrl}/${sanitizedStore}-collections.json`;
 
   const resp = await fetch(blobUrl);
   if (!resp.ok) {
-    throw new Error(`Failed to load collection map for store "${storeDomain}" from Blob storage (HTTP ${resp.status})`);
+    throw new Error(`Failed to load collection map for store "${storeDomain}" (HTTP ${resp.status})`);
   }
 
   const collections = await resp.json();
 
-  // Configure Fuse.js algorithm
+  // Configure Fuse to search directly against collection titles
   const fuseInstance = new Fuse(collections, {
     keys: ['title'],
     includeScore: true,
-    threshold: 0.5,       // 0.0 = exact match, 1.0 = matches anything
-    ignoreLocation: true,
-    useExtendedSearch: true,
-    distance: 100,        // Spatial search range for typos
-    minMatchCharLength: 3,
-    findAllMatches: true
+    threshold: 0.5,
+    ignoreLocation: true,    // Evaluates words regardless of position in the title
+    useExtendedSearch: true, // Enables (termA | termB) OR logic
+    minMatchCharLength: 2
   });
 
-  // Save to in-memory store cache
   storeCache.set(sanitizedStore, {
     instance: fuseInstance,
     timestamp: now
@@ -84,7 +71,6 @@ async function getFuseInstanceForStore(storeDomain) {
 }
 
 export default async function handler(req, res) {
-  // CORS Headers for storefront request flexibility
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -94,21 +80,16 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // Parse body/query params
   const body = req.body || {};
   const query = body.query || req.query.query;
   
-  // Extract store domain: passed explicitly, or fallback to the request Host/Origin header
   let store = body.store || req.query.store;
   if (!store && req.headers.origin) {
     try {
       store = new URL(req.headers.origin).hostname;
-    } catch (e) {
-      // Ignore URL parsing errors
-    }
+    } catch (e) {}
   }
 
-  // 1. Validate inputs
   if (!query || typeof query !== 'string' || !query.trim()) {
     return res.status(400).json({ redirect: false, reason: 'Empty query parameter' });
   }
@@ -118,37 +99,41 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 2. Fetch the store-specific Fuse instance
     const fuse = await getFuseInstanceForStore(store);
     const cleanQuery = query.trim();
-
-    // 1. Expand query with synonyms ("boot cut tuxedo" -> "boot cut tuxedo suit tux")
-    const expandedQuery = expandQueryWithSynonyms(cleanQuery);
     const queryWords = cleanQuery.split(/\s+/).filter(w => w.length > 2);
 
     let bestMatch = null;
 
-    // PASS 1: Check 2-word phrase matches using original words
+    // PASS 1: Multi-word phrase check (e.g. "boot cut")
+    // Prioritizes modifier phrases over single generic word overlaps
     if (queryWords.length >= 2) {
       for (let i = 0; i < queryWords.length - 1; i++) {
         const pair = `${queryWords[i]} ${queryWords[i+1]}`;
-        
-        // Also expand synonyms for the phrase pair (e.g., "cut tuxedo" -> "cut tuxedo suit")
-        const expandedPair = expandQueryWithSynonyms(pair);
-        const pairResults = fuse.search(expandedPair);
+        const pairResults = fuse.search(pair);
 
-        if (pairResults.length > 0 && pairResults[0].score <= 0.38) {
+        if (pairResults.length > 0 && pairResults[0].score <= 0.35) {
           bestMatch = pairResults[0];
           break;
         }
       }
     }
 
-    // PASS 2: Fall back to full expanded query search
+    // PASS 2: Full Query Extended Search (with safe synonym OR expansion)
     if (!bestMatch) {
-      const fullResults = fuse.search(expandedQuery);
+      const extendedQuery = buildExtendedQuery(cleanQuery);
+      const fullResults = fuse.search(extendedQuery);
+
       if (fullResults && fullResults.length > 0) {
         bestMatch = fullResults[0];
+      }
+    }
+
+    // PASS 3: Standard fallback search
+    if (!bestMatch) {
+      const fallbackResults = fuse.search(cleanQuery);
+      if (fallbackResults && fallbackResults.length > 0) {
+        bestMatch = fallbackResults[0];
       }
     }
 
@@ -156,7 +141,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ redirect: false, reason: 'No match found' });
     }
 
-    // Final Score Check
+    // Evaluate confidence threshold
     if (bestMatch.score <= 0.5) {
       return res.status(200).json({
         redirect: true,
