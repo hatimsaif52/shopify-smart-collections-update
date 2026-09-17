@@ -102,30 +102,41 @@ export default async function handler(req, res) {
     const fuse = await getFuseInstanceForStore(store);
     const cleanQuery = query.trim();
     const queryWords = cleanQuery.split(/\s+/).filter(w => w.length > 0);
-    const extendedQuery = buildExtendedQuery(cleanQuery);
-    let results = fuse.search(extendedQuery);
-    if (!results || results.length === 0) {
-      results = fuse.search(cleanQuery);
-    }
+
+    // 1. Run standard Fuse search
+    let results = fuse.search(cleanQuery);
+
     if (!results || results.length === 0) {
       return res.status(200).json({ redirect: false, reason: 'No match found' });
     }
-    console.log(results);
+
     let bestMatch = results[0];
+
+    // 2. PRIMARY NOUN ENFORCEMENT
     if (queryWords.length > 1) {
       const primaryNoun = queryWords[queryWords.length - 1].toLowerCase();
-      const nounMatch = results.slice(0, 5).find(res => {
+      const validNouns = [primaryNoun, ...(SYNONYM_MAP[primaryNoun] || [])];
+
+      // Check if ANY result in the top 20 contains the main product noun (e.g., "loafers")
+      const nounMatches = results.filter(res => {
         const title = res.item.title.toLowerCase();
-        return title.includes(primaryNoun) || 
-               (SYNONYM_MAP[primaryNoun] && SYNONYM_MAP[primaryNoun].some(syn => title.includes(syn)));
+        return validNouns.some(noun => title.includes(noun));
       });
-      if (nounMatch && nounMatch.score <= 0.45) {
-        bestMatch = nounMatch;
+
+      // If collections with "loafers" exist in the results, ONLY pick from those!
+      if (nounMatches.length > 0) {
+        bestMatch = nounMatches[0]; // Takes the best matching loafer collection (e.g. "Mens Loafers")
+      } else {
+        // If "loafers" was completely absent from all results, don't fall back to blazers
+        return res.status(200).json({ 
+          redirect: false, 
+          reason: `Query specified '${primaryNoun}', but no matching collection was found.` 
+        });
       }
     }
 
-    // Evaluate confidence threshold
-    if (bestMatch.score <= 0.5) {
+    // 3. Final Confidence Threshold Check
+    if (bestMatch.score <= 0.45) { // Slightly elevated threshold to allow generic noun matches like "Mens Loafers"
       return res.status(200).json({
         redirect: true,
         handle: bestMatch.item.handle,
@@ -134,14 +145,10 @@ export default async function handler(req, res) {
       });
     }
 
-    return res.status(200).json({ 
-      redirect: false, 
-      reason: 'Best match confidence score fell below acceptable threshold',
-      score: bestMatch.score
-    });
+    return res.status(200).json({ redirect: false, reason: 'Confidence score below threshold' });
 
   } catch (error) {
-    console.error(`[Match Error] Store: ${store} | Error:`, error);
+    console.error('[Match Error]:', error);
     return res.status(500).json({ redirect: false, error: error.message });
   }
 }
