@@ -56,7 +56,7 @@ async function getFuseInstanceForStore(storeDomain) {
   const fuseInstance = new Fuse(collections, {
     keys: ['title'],
     includeScore: true,
-    threshold: 0.4,
+    threshold: 0.5,
     ignoreLocation: true,    // Evaluates words regardless of position in the title
     useExtendedSearch: true, // Enables (termA | termB) OR logic
     minMatchCharLength: 2,
