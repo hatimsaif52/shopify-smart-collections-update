@@ -21,13 +21,13 @@ function sanitizeStoreDomain(domain) {
  * "boot cut tuxedo" -> "boot cut (tuxedo | suit | tux)"
  */
 function buildExtendedQuery(query) {
-  const words = query.toLowerCase().trim().split(/\s+/).filter(w => w.length > 0);
+  const words = query.toLowerCase().trim().split(/\s+/);
+  
   return words.map(word => {
     if (SYNONYM_MAP[word]) {
-      const options = [word, ...SYNONYM_MAP[word]].map(w => `'${w}`);
-      return `(${options.join(' | ')})`;
+      return `(${word} | ${SYNONYM_MAP[word].join(' | ')})`;
     }
-    return `'${word}`;
+    return word;
   }).join(' ');
 }
 
@@ -59,8 +59,7 @@ async function getFuseInstanceForStore(storeDomain) {
     threshold: 0.5,
     ignoreLocation: true,    // Evaluates words regardless of position in the title
     useExtendedSearch: true, // Enables (termA | termB) OR logic
-    minMatchCharLength: 2,
-    findAllMatches: true
+    minMatchCharLength: 2
   });
 
   storeCache.set(sanitizedStore, {
@@ -102,37 +101,48 @@ export default async function handler(req, res) {
   try {
     const fuse = await getFuseInstanceForStore(store);
     const cleanQuery = query.trim();
-    const queryWords = cleanQuery.split(/\s+/).filter(w => w.length > 0);
+    const queryWords = cleanQuery.split(/\s+/).filter(w => w.length > 2);
 
-    // 1. Run standard Fuse search
-    let results = fuse.search(cleanQuery);
+    let bestMatch = null;
 
-    if (!results || results.length === 0) {
-      return res.status(200).json({ redirect: false, reason: 'No match found' });
-    }
+    // PASS 1: Multi-word phrase check (e.g. "boot cut")
+    // Prioritizes modifier phrases over single generic word overlaps
+    if (queryWords.length >= 2) {
+      for (let i = 0; i < queryWords.length - 1; i++) {
+        const pair = `${queryWords[i]} ${queryWords[i+1]}`;
+        const pairResults = fuse.search(pair);
 
-    let bestMatch = results[0];
-
-    // 2. PRIMARY NOUN ENFORCEMENT
-    if (queryWords.length > 1) {
-      const primaryNoun = queryWords[queryWords.length - 1].toLowerCase();
-      const validNouns = [primaryNoun, ...(SYNONYM_MAP[primaryNoun] || [])];
-      const nounMatches = results.filter(res => {
-        const title = res.item.title.toLowerCase();
-        return validNouns.some(noun => title.includes(noun));
-      });
-      if (nounMatches.length > 0) {
-        bestMatch = nounMatches[0];
-      } else {
-        return res.status(200).json({ 
-          redirect: false, 
-          reason: `Query specified '${primaryNoun}', but no matching collection was found.` 
-        });
+        if (pairResults.length > 0 && pairResults[0].score <= 0.35) {
+          bestMatch = pairResults[0];
+          break;
+        }
       }
     }
 
-    // 3. Final Confidence Threshold Check
-    if (bestMatch.score <= 0.45) {
+    // PASS 2: Full Query Extended Search (with safe synonym OR expansion)
+    if (!bestMatch) {
+      const extendedQuery = buildExtendedQuery(cleanQuery);
+      const fullResults = fuse.search(extendedQuery);
+
+      if (fullResults && fullResults.length > 0) {
+        bestMatch = fullResults[0];
+      }
+    }
+
+    // PASS 3: Standard fallback search
+    if (!bestMatch) {
+      const fallbackResults = fuse.search(cleanQuery);
+      if (fallbackResults && fallbackResults.length > 0) {
+        bestMatch = fallbackResults[0];
+      }
+    }
+
+    if (!bestMatch) {
+      return res.status(200).json({ redirect: false, reason: 'No match found' });
+    }
+
+    // Evaluate confidence threshold
+    if (bestMatch.score <= 0.5) {
       return res.status(200).json({
         redirect: true,
         handle: bestMatch.item.handle,
@@ -141,10 +151,14 @@ export default async function handler(req, res) {
       });
     }
 
-    return res.status(200).json({ redirect: false, reason: 'Confidence score below threshold' });
+    return res.status(200).json({ 
+      redirect: false, 
+      reason: 'Best match confidence score fell below acceptable threshold',
+      score: bestMatch.score
+    });
 
   } catch (error) {
-    console.error('[Match Error]:', error);
+    console.error(`[Match Error] Store: ${store} | Error:`, error);
     return res.status(500).json({ redirect: false, error: error.message });
   }
 }
