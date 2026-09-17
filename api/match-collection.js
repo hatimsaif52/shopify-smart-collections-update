@@ -59,7 +59,8 @@ async function getFuseInstanceForStore(storeDomain) {
     threshold: 0.4,
     ignoreLocation: true,    // Evaluates words regardless of position in the title
     useExtendedSearch: true, // Enables (termA | termB) OR logic
-    minMatchCharLength: 2
+    minMatchCharLength: 2,
+    findAllMatches: true
   });
 
   storeCache.set(sanitizedStore, {
