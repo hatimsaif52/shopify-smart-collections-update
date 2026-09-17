@@ -101,44 +101,26 @@ export default async function handler(req, res) {
   try {
     const fuse = await getFuseInstanceForStore(store);
     const cleanQuery = query.trim();
-    const queryWords = cleanQuery.split(/\s+/).filter(w => w.length > 2);
-
-    let bestMatch = null;
-
-    // PASS 1: Multi-word phrase check (e.g. "boot cut")
-    // Prioritizes modifier phrases over single generic word overlaps
-    if (queryWords.length >= 2) {
-      for (let i = 0; i < queryWords.length - 1; i++) {
-        const pair = `${queryWords[i]} ${queryWords[i+1]}`;
-        const pairResults = fuse.search(pair);
-
-        if (pairResults.length > 0 && pairResults[0].score <= 0.35) {
-          bestMatch = pairResults[0];
-          break;
-        }
-      }
+    const queryWords = cleanQuery.split(/\s+/).filter(w => w.length > 0);
+    const extendedQuery = buildExtendedQuery(cleanQuery);
+    let results = fuse.search(extendedQuery);
+    if (!results || results.length === 0) {
+      results = fuse.search(cleanQuery);
     }
-
-    // PASS 2: Full Query Extended Search (with safe synonym OR expansion)
-    if (!bestMatch) {
-      const extendedQuery = buildExtendedQuery(cleanQuery);
-      const fullResults = fuse.search(extendedQuery);
-
-      if (fullResults && fullResults.length > 0) {
-        bestMatch = fullResults[0];
-      }
-    }
-
-    // PASS 3: Standard fallback search
-    if (!bestMatch) {
-      const fallbackResults = fuse.search(cleanQuery);
-      if (fallbackResults && fallbackResults.length > 0) {
-        bestMatch = fallbackResults[0];
-      }
-    }
-
-    if (!bestMatch) {
+    if (!results || results.length === 0) {
       return res.status(200).json({ redirect: false, reason: 'No match found' });
+    }
+    let bestMatch = results[0];
+    if (queryWords.length > 1) {
+      const primaryNoun = queryWords[queryWords.length - 1].toLowerCase();
+      const nounMatch = results.slice(0, 5).find(res => {
+        const title = res.item.title.toLowerCase();
+        return title.includes(primaryNoun) || 
+               (SYNONYM_MAP[primaryNoun] && SYNONYM_MAP[primaryNoun].some(syn => title.includes(syn)));
+      });
+      if (nounMatch && nounMatch.score <= 0.45) {
+        bestMatch = nounMatch;
+      }
     }
 
     // Evaluate confidence threshold
