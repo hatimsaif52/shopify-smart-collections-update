@@ -110,6 +110,7 @@ export default async function handler(req, res) {
     if (!results || results.length === 0) {
       return res.status(200).json({ redirect: false, reason: 'No match found' });
     }
+    console.log(results);
     let bestMatch = results[0];
     if (queryWords.length > 1) {
       const primaryNoun = queryWords[queryWords.length - 1].toLowerCase();
