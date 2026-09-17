@@ -21,13 +21,13 @@ function sanitizeStoreDomain(domain) {
  * "boot cut tuxedo" -> "boot cut (tuxedo | suit | tux)"
  */
 function buildExtendedQuery(query) {
-  const words = query.toLowerCase().trim().split(/\s+/);
-  
+  const words = query.toLowerCase().trim().split(/\s+/).filter(w => w.length > 0);
   return words.map(word => {
     if (SYNONYM_MAP[word]) {
-      return `(${word} | ${SYNONYM_MAP[word].join(' | ')})`;
+      const options = [word, ...SYNONYM_MAP[word]].map(w => `'${w}`);
+      return `(${options.join(' | ')})`;
     }
-    return word;
+    return `'${word}`;
   }).join(' ');
 }
 
@@ -56,7 +56,7 @@ async function getFuseInstanceForStore(storeDomain) {
   const fuseInstance = new Fuse(collections, {
     keys: ['title'],
     includeScore: true,
-    threshold: 0.5,
+    threshold: 0.4,
     ignoreLocation: true,    // Evaluates words regardless of position in the title
     useExtendedSearch: true, // Enables (termA | termB) OR logic
     minMatchCharLength: 2
@@ -116,18 +116,13 @@ export default async function handler(req, res) {
     if (queryWords.length > 1) {
       const primaryNoun = queryWords[queryWords.length - 1].toLowerCase();
       const validNouns = [primaryNoun, ...(SYNONYM_MAP[primaryNoun] || [])];
-
-      // Check if ANY result in the top 20 contains the main product noun (e.g., "loafers")
       const nounMatches = results.filter(res => {
         const title = res.item.title.toLowerCase();
         return validNouns.some(noun => title.includes(noun));
       });
-
-      // If collections with "loafers" exist in the results, ONLY pick from those!
       if (nounMatches.length > 0) {
-        bestMatch = nounMatches[0]; // Takes the best matching loafer collection (e.g. "Mens Loafers")
+        bestMatch = nounMatches[0];
       } else {
-        // If "loafers" was completely absent from all results, don't fall back to blazers
         return res.status(200).json({ 
           redirect: false, 
           reason: `Query specified '${primaryNoun}', but no matching collection was found.` 
@@ -136,7 +131,7 @@ export default async function handler(req, res) {
     }
 
     // 3. Final Confidence Threshold Check
-    if (bestMatch.score <= 0.45) { // Slightly elevated threshold to allow generic noun matches like "Mens Loafers"
+    if (bestMatch.score <= 0.45) {
       return res.status(200).json({
         redirect: true,
         handle: bestMatch.item.handle,
