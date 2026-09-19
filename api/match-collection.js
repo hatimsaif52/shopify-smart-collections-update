@@ -47,7 +47,6 @@ async function getMiniSearchInstanceForStore(storeDomain) {
   const miniSearch = new MiniSearch({
     fields: ['title'],       
     storeFields: ['title', 'handle'], 
-    // Global options used during index construction
     tokenize: string => string.toLowerCase().split(/[^a-z0-9]+/)
   });
 
@@ -104,23 +103,27 @@ export default async function handler(req, res) {
     // 1. PASS 1: Strict 'AND' Search 
     let results = miniSearch.search(cleanQuery, { ...baseSearchOptions, combineWith: 'AND' });
 
-    // 2. PASS 2: Programmatic Synonym Expansion Object Pass
+    // 2. PASS 2: Corrected Programmatic Synonym Combination Pass
     if (results.length === 0) {
-      const structuredQuery = {
+      // Create separate word condition tracks to ensure every query word matches something
+      const wordQueries = queryWords.map(word => {
+        const synonyms = SYNONYM_MAP[word] || [];
+        const terms = [word, ...synonyms];
+        
+        return {
+          ...baseSearchOptions,
+          combineWith: 'OR',
+          queries: terms // An array of plain strings is safe and parsed correctly
+        };
+      });
+
+      results = miniSearch.search({
         combineWith: 'AND',
-        queries: queryWords.map(word => {
-          const synonyms = SYNONYM_MAP[word] || [];
-          const terms = [word, ...synonyms];
-          return {
-            combineWith: 'OR',
-            queries: terms.map(t => ({ ...baseSearchOptions, term: t }))
-          };
-        })
-      };
-      results = miniSearch.search(structuredQuery);
+        queries: wordQueries
+      });
     }
 
-    // 3. PASS 3: Fallback 'OR' Search with high matching criteria
+    // 3. PASS 3: Fallback 'OR' Search with terms
     if (results.length === 0) {
       results = miniSearch.search(cleanQuery, { ...baseSearchOptions, combineWith: 'OR' });
     }
@@ -129,22 +132,20 @@ export default async function handler(req, res) {
       return res.status(200).json({ redirect: false, reason: 'No match found' });
     }
 
-    let bestMatch = results[0];
+    let bestMatch = results;
 
-    // 4. FIX: STABLE NOUN VALIDATION USING MINISEARCH'S TOKEN ENGINE
+    // 4. FIX: Robust structural evaluation for primary noun
     if (queryWords.length > 1) {
       const primaryNoun = queryWords[queryWords.length - 1];
       const validNouns = [primaryNoun, ...(SYNONYM_MAP[primaryNoun] || [])];
 
-      // Perform a localized verification match purely for our trusted nouns
       const verificationResults = miniSearch.search({
+        ...baseSearchOptions,
         combineWith: 'OR',
-        queries: validNouns.map(noun => ({ ...baseSearchOptions, term: noun }))
+        queries: validNouns
       });
       
       const verifiedIds = new Set(verificationResults.map(r => r.id));
-
-      // Attempt to find the top scoring candidate that satisfies our category noun requirement
       const strictMatch = results.find(res => verifiedIds.has(res.id));
 
       if (strictMatch) {
@@ -157,8 +158,8 @@ export default async function handler(req, res) {
       }
     }
 
-    // Dynamic threshold: Reject only absolute baseline noise scores
-    if (bestMatch.score >= 0.2) {
+    // Dynamic threshold match
+    if (bestMatch.score >= 0.15) {
       return res.status(200).json({
         redirect: true,
         handle: bestMatch.handle,
