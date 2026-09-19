@@ -6,6 +6,6 @@
   "dependencies": {
   	"@upstash/qstash": "^2.x.x",
     "@vercel/blob": "^0.27.1",
-    "fuse.js": "^7.0.0" 
+    "minisearch": "^7.1.1"
   }
 }

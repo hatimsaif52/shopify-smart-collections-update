@@ -1,37 +1,23 @@
-import Fuse from 'fuse.js';
+import MiniSearch from 'minisearch';
 
 const storeCache = new Map();
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
-// Controlled, whole-word synonym map for equivalent terms
 const SYNONYM_MAP = {
   'tuxedo': ['suit', 'tux'],
   'tux': ['suit', 'tuxedo'],
   'suit': ['tuxedo', 'tux'],
   'pants': ['trousers', 'slacks'],
-  'trousers': ['pants', 'slacks']
+  'trousers': ['pants', 'slacks'],
+  'boot': ['boots', 'footwear'],
+  'boots': ['boot', 'footwear']
 };
 
 function sanitizeStoreDomain(domain) {
   return domain.toLowerCase().replace(/[^a-z0-9]/g, '-');
 }
 
-/**
- * Expands whole words safely using Fuse extended search syntax:
- * "boot cut tuxedo" -> "boot cut (tuxedo | suit | tux)"
- */
-function buildExtendedQuery(query) {
-  const words = query.toLowerCase().trim().split(/\s+/);
-  
-  return words.map(word => {
-    if (SYNONYM_MAP[word]) {
-      return `(${word} | ${SYNONYM_MAP[word].join(' | ')})`;
-    }
-    return word;
-  }).join(' ');
-}
-
-async function getFuseInstanceForStore(storeDomain) {
+async function getMiniSearchInstanceForStore(storeDomain) {
   const sanitizedStore = sanitizeStoreDomain(storeDomain);
   const now = Date.now();
 
@@ -47,27 +33,32 @@ async function getFuseInstanceForStore(storeDomain) {
 
   const resp = await fetch(blobUrl);
   if (!resp.ok) {
-    throw new Error(`Failed to load collection map for store "${storeDomain}" (HTTP ${resp.status})`);
+    throw new Error(`Failed to load collections for store "${storeDomain}" (HTTP ${resp.status})`);
   }
 
-  const collections = await resp.json();
+  const rawCollections = await resp.json();
 
-  // Configure Fuse to search directly against collection titles
-  const fuseInstance = new Fuse(collections, {
-    keys: ['title'],
-    includeScore: true,
-    threshold: 0.5,
-    ignoreLocation: true,    // Evaluates words regardless of position in the title
-    useExtendedSearch: true, // Enables (termA | termB) OR logic
-    minMatchCharLength: 2
+  const collectionsWithId = rawCollections.map((col, index) => ({
+    id: col.handle || `idx-${index}`,
+    title: col.title,
+    handle: col.handle
+  }));
+
+  const miniSearch = new MiniSearch({
+    fields: ['title'],       
+    storeFields: ['title', 'handle'], 
+    // Global options used during index construction
+    tokenize: string => string.toLowerCase().split(/[^a-z0-9]+/)
   });
 
+  miniSearch.addAll(collectionsWithId);
+
   storeCache.set(sanitizedStore, {
-    instance: fuseInstance,
+    instance: miniSearch,
     timestamp: now
   });
 
-  return fuseInstance;
+  return miniSearch;
 }
 
 export default async function handler(req, res) {
@@ -82,7 +73,7 @@ export default async function handler(req, res) {
 
   const body = req.body || {};
   const query = body.query || req.query.query;
-  
+
   let store = body.store || req.query.store;
   if (!store && req.headers.origin) {
     try {
@@ -95,64 +86,89 @@ export default async function handler(req, res) {
   }
 
   if (!store || typeof store !== 'string') {
-    return res.status(400).json({ redirect: false, reason: 'Missing or invalid store parameter' });
+    return res.status(400).json({ redirect: false, reason: 'Missing store parameter' });
   }
 
   try {
-    const fuse = await getFuseInstanceForStore(store);
-    const cleanQuery = query.trim();
-    const queryWords = cleanQuery.split(/\s+/).filter(w => w.length > 2);
+    const miniSearch = await getMiniSearchInstanceForStore(store);
+    const cleanQuery = query.trim().toLowerCase();
+    const queryWords = cleanQuery.split(/[^a-z0-9]+/).filter(w => w.length > 0);
 
-    let bestMatch = null;
+    const baseSearchOptions = {
+      fields: ['title'],
+      boost: { title: 2 },
+      fuzzy: 0.2,
+      prefix: true
+    };
 
-    // PASS 1: Multi-word phrase check (e.g. "boot cut")
-    // Prioritizes modifier phrases over single generic word overlaps
-    if (queryWords.length >= 2) {
-      for (let i = 0; i < queryWords.length - 1; i++) {
-        const pair = `${queryWords[i]} ${queryWords[i+1]}`;
-        const pairResults = fuse.search(pair);
+    // 1. PASS 1: Strict 'AND' Search 
+    let results = miniSearch.search(cleanQuery, { ...baseSearchOptions, combineWith: 'AND' });
 
-        if (pairResults.length > 0 && pairResults[0].score <= 0.35) {
-          bestMatch = pairResults[0];
-          break;
-        }
-      }
+    // 2. PASS 2: Programmatic Synonym Expansion Object Pass
+    if (results.length === 0) {
+      const structuredQuery = {
+        combineWith: 'AND',
+        queries: queryWords.map(word => {
+          const synonyms = SYNONYM_MAP[word] || [];
+          const terms = [word, ...synonyms];
+          return {
+            combineWith: 'OR',
+            queries: terms.map(t => ({ ...baseSearchOptions, term: t }))
+          };
+        })
+      };
+      results = miniSearch.search(structuredQuery);
     }
 
-    // PASS 2: Full Query Extended Search (with safe synonym OR expansion)
-    if (!bestMatch) {
-      const extendedQuery = buildExtendedQuery(cleanQuery);
-      const fullResults = fuse.search(extendedQuery);
-
-      if (fullResults && fullResults.length > 0) {
-        bestMatch = fullResults[0];
-      }
+    // 3. PASS 3: Fallback 'OR' Search with high matching criteria
+    if (results.length === 0) {
+      results = miniSearch.search(cleanQuery, { ...baseSearchOptions, combineWith: 'OR' });
     }
 
-    // PASS 3: Standard fallback search
-    if (!bestMatch) {
-      const fallbackResults = fuse.search(cleanQuery);
-      if (fallbackResults && fallbackResults.length > 0) {
-        bestMatch = fallbackResults[0];
-      }
-    }
-
-    if (!bestMatch) {
+    if (!results || results.length === 0) {
       return res.status(200).json({ redirect: false, reason: 'No match found' });
     }
 
-    // Evaluate confidence threshold
-    if (bestMatch.score <= 0.5) {
+    let bestMatch = results[0];
+
+    // 4. FIX: STABLE NOUN VALIDATION USING MINISEARCH'S TOKEN ENGINE
+    if (queryWords.length > 1) {
+      const primaryNoun = queryWords[queryWords.length - 1];
+      const validNouns = [primaryNoun, ...(SYNONYM_MAP[primaryNoun] || [])];
+
+      // Perform a localized verification match purely for our trusted nouns
+      const verificationResults = miniSearch.search({
+        combineWith: 'OR',
+        queries: validNouns.map(noun => ({ ...baseSearchOptions, term: noun }))
+      });
+      
+      const verifiedIds = new Set(verificationResults.map(r => r.id));
+
+      // Attempt to find the top scoring candidate that satisfies our category noun requirement
+      const strictMatch = results.find(res => verifiedIds.has(res.id));
+
+      if (strictMatch) {
+        bestMatch = strictMatch;
+      } else {
+        return res.status(200).json({
+          redirect: false,
+          reason: `No collection found matching primary category term: '${primaryNoun}'`
+        });
+      }
+    }
+
+    // Dynamic threshold: Reject only absolute baseline noise scores
+    if (bestMatch.score >= 0.2) {
       return res.status(200).json({
         redirect: true,
-        handle: bestMatch.item.handle,
-        matchedTitle: bestMatch.item.title,
-        confidenceScore: Number((1 - bestMatch.score).toFixed(2))
+        handle: bestMatch.handle,
+        matchedTitle: bestMatch.title,
+        confidenceScore: Number(bestMatch.score.toFixed(2))
       });
     }
 
-    return res.status(200).json({ 
-      redirect: false, 
+    return res.status(200).json({
+      redirect: false,
       reason: 'Best match confidence score fell below acceptable threshold',
       score: bestMatch.score
     });
