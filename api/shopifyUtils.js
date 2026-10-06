@@ -12,6 +12,7 @@ export async function resolveShopifyToken(storeCfg) {
         grant_type: 'client_credentials'
       })
     });
+    console.log(response);
     const data = await response.json();
 
     if (!response.ok) {
