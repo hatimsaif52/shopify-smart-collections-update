@@ -1,5 +1,6 @@
 import { put } from '@vercel/blob';
-import { 
+import {
+  resolveShopifyToken,
   runBulkQuery, 
   getCurrentBulkOperationStatus, 
   sleep 
@@ -32,6 +33,8 @@ export default async function handler(req, res) {
     if (!storeCfg) {
       return res.status(404).json({ error: 'Store config not found' });
     }
+
+    storeCfg.token = await resolveShopifyToken(storeCfg);
 
     // 4. Check if a bulk operation is already running
     const currentOp = await getCurrentBulkOperationStatus(storeCfg);

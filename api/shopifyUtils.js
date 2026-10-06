@@ -1,3 +1,28 @@
+export async function resolveShopifyToken(storeCfg) {
+  if (storeCfg.token) return storeCfg.token;
+  if (storeCfg.client_id && storeCfg.client_secret) {
+    console.log(`Generating temporary token for ${storeCfg.store}...`);
+
+    const response = await fetch(`https://${storeCfg.store}/admin/oauth/access_token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: storeCfg.client_id,
+        client_secret: storeCfg.client_secret,
+        grant_type: 'client_credentials'
+      })
+    });
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(`Shopify Auth Error [${storeCfg.store}]: ${data.error_description || data.error}`);
+    }
+    return data.access_token;
+  }
+
+  throw new Error(`Missing credentials for store: ${storeCfg.store}`);
+}
+
 export async function shopifyGraphql(store, token, apiVersion, query, variables = {}) {
   const resp = await fetch(`https://${store}/admin/api/${apiVersion}/graphql.json`, {
     method: 'POST',
