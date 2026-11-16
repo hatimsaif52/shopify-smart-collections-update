@@ -9,7 +9,7 @@ const SYNONYM_MAP = {
   'suit': ['tuxedo', 'tux'],
   'pants': ['trousers', 'slacks'],
   'trousers': ['pants', 'slacks'],
-  'shoes': ['shoe','boots','boot','footwear']
+  'shoes': ['shoe','boots','boot','footwear'],
   'boot': ['boots', 'footwear','shoes','shoe'],
   'boots': ['boot', 'footwear','shoes','shoe']
 };
