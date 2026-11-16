@@ -97,8 +97,8 @@ export default async function handler(req, res) {
     const baseSearchOptions = {
       fields: ['title'],
       boost: { title: 2 },
-      fuzzy: 0.2,
-      prefix: true
+      fuzzy: 0.1,
+      prefix: queryWords.length === 1 // Only use prefix for single-word queries
     };
 
     // 1. PASS 1: Strict 'AND' Search 
@@ -160,7 +160,7 @@ export default async function handler(req, res) {
     }
 
     // Dynamic threshold match
-    if (bestMatch.score >= 0.15) {
+    if (bestMatch.score >= 0.3) {
       return res.status(200).json({
         redirect: true,
         handle: bestMatch.handle,
