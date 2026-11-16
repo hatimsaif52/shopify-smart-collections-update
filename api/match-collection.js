@@ -9,8 +9,9 @@ const SYNONYM_MAP = {
   'suit': ['tuxedo', 'tux'],
   'pants': ['trousers', 'slacks'],
   'trousers': ['pants', 'slacks'],
-  'boot': ['boots', 'footwear'],
-  'boots': ['boot', 'footwear']
+  'shoes': ['shoe','boots','boot','footwear']
+  'boot': ['boots', 'footwear','shoes','shoe'],
+  'boots': ['boot', 'footwear','shoes','shoe']
 };
 
 function sanitizeStoreDomain(domain) {
