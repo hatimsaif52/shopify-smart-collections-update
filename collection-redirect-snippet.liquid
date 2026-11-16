@@ -1,0 +1,38 @@
+<script type="text/javascript">
+  function collectionRedirect(searchTerm, excludeHandle) {
+    if (!searchTerm) return;
+
+    // Optional visual indicator
+    const container = document.querySelector('.template-collection') || document.body;
+    container.style.opacity = '0.5';
+    const store = '{{ shop.permanent_domain }}';
+    const body = { query: searchTerm, store };
+    if (excludeHandle) body.excludeHandle = excludeHandle;
+    
+    fetch('https://shopify-smart-collections-update.vercel.app/api/match-collection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    .then(res => res.json())
+    .then(data => {
+      if (data.redirect && data.handle) {
+        window.location.href = '/collections/' + data.handle;
+      } else {
+        container.style.opacity = '1';
+      }
+    })
+    .catch(err => {
+      console.error('Smart redirect error:', err);
+      container.style.opacity = '1';
+    });
+  }
+</script>
+
+{% if collection.products_count == 0 %}
+<script>
+  const searchTerm = "{{ collection.title | downcase }}";
+  const currentHandle = "{{ collection.handle }}";
+  collectionRedirect(searchTerm, currentHandle);
+</script>
+{% endif %}

@@ -5,7 +5,7 @@
       "schedule": "0 3 * * *" 
     },
     {
-      "path": "/api/sync-collections",
+      "path": "/api/queue-all-collections",
       "schedule": "0 0 * * *"
     }
   ]

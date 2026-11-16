@@ -8,7 +8,9 @@ import {
 
 export default async function handler(req, res) {
   try {
-    // 1. Extract query params and auth header
+    // 1. Extract store from body (QStash) or query params (manual)
+    const body = req.body || {};
+    const storeFromBody = body.store;
     const { searchParams } = new URL(req.url, `https://${req.headers.host}`);
     const manualStore = searchParams.get('store');
     const authHeader = req.headers.authorization;
@@ -22,10 +24,12 @@ export default async function handler(req, res) {
     const stores = JSON.parse(process.env.SHOPIFY_STORES_CONFIG || '[]');
     let storeCfg;
 
-    if (manualStore) {
-      storeCfg = stores.find(s => s.store === manualStore);
+    const targetStore = storeFromBody || manualStore;
+    
+    if (targetStore) {
+      storeCfg = stores.find(s => s.store === targetStore);
     } else {
-      // Deterministically pick a store based on the current day index
+      // Fallback: deterministically pick a store based on the current day index
       const dayIndex = Math.floor(Date.now() / (1000 * 60 * 60 * 24));
       storeCfg = stores[dayIndex % stores.length];
     }

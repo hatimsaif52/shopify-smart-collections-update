@@ -73,6 +73,7 @@ export default async function handler(req, res) {
 
   const body = req.body || {};
   const query = body.query || req.query.query;
+  const excludeHandle = body.excludeHandle;
 
   let store = body.store || req.query.store;
   if (!store && req.headers.origin) {
@@ -131,6 +132,15 @@ export default async function handler(req, res) {
 
     if (!results || results.length === 0) {
       return res.status(200).json({ redirect: false, reason: 'No match found' });
+    }
+
+    // Filter out the excluded collection handle if provided
+    if (excludeHandle) {
+      results = results.filter(r => r.handle !== excludeHandle);
+    }
+
+    if (results.length === 0) {
+      return res.status(200).json({ redirect: false, reason: 'No match found after excluding current collection' });
     }
 
     let bestMatch = results;
